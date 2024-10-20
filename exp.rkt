@@ -21,17 +21,18 @@
 (check-false (in-env? 'x '((y . 0))))
 
 ;; function closure
-(struct function-closure
+(struct closure
   (arg ; arg name : symbol?
    body ; body of the function : Term
-   var-env ; env
-   op-env ; env
+   saved-env ; env
    ) #:transparent)
 
-(define (apply-function-closure clos v)
-  (match clos
-    [(function-closure arg body var-env op-env) 42]))
-;(eval
+;; closure * value * continuation -> value
+(define (apply-closure cls v cont)
+  (match-define (closure arg body saved-env) cls)
+  (eval body
+        (extend-env arg v saved-env)
+        cont))
 
 ;; handler closure
 (struct handler-closure
@@ -104,13 +105,22 @@
 (struct end-cont () #:transparent)
 
 ;; (if-cont □ e1 e2)
-(struct if-cont (e1 e2 saved-env cont) #:transparent)
+(struct if-cont (e1 e2 saved-env saved-cont) #:transparent)
+
+;; (+ □ e)
+(struct add-cont1 (e saved-env saved-cont) #:transparent)
+
+;; (+ v □)
+(struct add-cont2 (v saved-cont) #:transparent)
 
 ;; (□ e)
-(struct app-cont1 (e saved-env cont) #:transparent)
+(struct app-cont1 (e saved-env saved-cont) #:transparent)
 
 ;; (v □)
-(struct app-cont2 (v saved-env cont) #:transparent)
+(struct app-cont2 (v saved-cont) #:transparent)
+
+;; (perform op □)
+(struct perform-cont (op saved-cont) #:transparent)
 
 ;; (with handler □)
 (struct handler-cont
@@ -119,58 +129,151 @@
    saved-cont ; continuation
    ) #:transparent)
 
+;; (cotinue k □)
+(struct continue-cont
+  (
+   k ; continuation
+   saved-cont)
+  #:transparent)
+
 ;; symbol * continuation -> continuation * continuation * handler-caluse
 ;; op-name: an operation name
 ;; cont: a continuation
 ;; If cont = E1[(with-handler h [E2])]
 ;; where h maps op-name to clause
-;; returns values: E1[(with-handler h [])], E2, clause
+;; returns values: E1, (with-handler h E2), clause
 (define (capture-handler op-name cont)
   (match cont
     [(end-cont) (error (format "unhandled op: ~a" op-name))]
+    [(add-cont1 e saved-env saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (add-cont1 e saved-env E2) clause)]
+    [(add-cont2 v saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (add-cont2 v E2) clause)]
     [(if-cont e1 e2 saved-env saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (if-cont e1 e2 saved-env E2) clause)]
+    [(app-cont1 e2 saved-env saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (app-cont1 e2 saved-env E2) clause)]
+    [(app-cont2 v saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (app-cont2 v E2) clause)]
+    [(continue-cont k saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (continue-cont k E2) clause)]
+    [(perform-cont op saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (perform-cont op E2) clause)]
     [(handler-cont handler saved-cont)
      (define clause? (handles? handler op-name))
      (if clause?
-         (values cont saved-cont clause?)
-         
-           (let-values ([(E1 E2 clause) (capture-handler op-name saved-cont)])
+         (values saved-cont (handler-cont handler (end-cont)) clause?)
+         (let-values ([(E1 E2 clause) (capture-handler op-name saved-cont)])
            (values E1 (handler-cont handler E2) clause)))]))
 
+;; continuation * continuation -> continuation
+;; returns cont1[cont2]
+(define (compose-cont cont1 cont2)
+  (match cont2
+    [(end-cont) cont1]
+    [(add-cont1 e saved-env saved-cont)
+     (add-cont1 e saved-env (compose-cont cont1 saved-cont))]
+    [(add-cont2 v saved-cont)
+     (add-cont2 v (compose-cont cont1 saved-cont))]
+    [(if-cont e1 e2 saved-env saved-cont)
+     (if-cont e1 e2 saved-env (compose-cont cont1 saved-cont))]
+    [(app-cont1 e2 saved-env saved-cont)
+     (app-cont1 e2 saved-env (compose-cont cont1 saved-cont))]
+    [(app-cont2 v saved-cont)
+     (app-cont2 v (compose-cont cont1 saved-cont))]
+    [(continue-cont k saved-cont)
+     (continue-cont k (compose-cont cont1 saved-cont))]
+    [(perform-cont op saved-cont)
+     (perform-cont op (compose-cont cont1 saved-cont))]
+    [(handler-cont handler saved-cont)
+     (handler-cont handler (compose-cont cont1 saved-cont))]))
 
-         
+(define-values (E1 E2 cls)
+  (capture-handler
+   'op
+   ;; (if (handle handler-1 (if [] 0 1)) 2 3)
+   (if-cont 0 1 (empty-env)
+            (handler-cont handler-1
+                          (if-cont 2 3 (empty-env)
+                                   (end-cont))))))
 
-;; values
-(struct perform-val (op-name) #:transparent)
+(check-equal?
+ E1
+ ;; (if □ 2 3)
+ (if-cont 2 3 (empty-env) (end-cont)))
 
-(struct closure-val (arg body saved-env) #:transparent)
+(check-equal?
+ E2
+ ;; (handle handler-1 (if [] 0 1))
+ (if-cont 0 1 (empty-env) (handler-cont handler-1 (end-cont))))
 
+(check-equal? cls (handler-clause 'x 'k 42 (empty-env)))
+
+;; handler-clause * value * continuation * continuation -> value
+(define (apply-handler-clause cls v k cont)
+  (displayln (format "apply-handler-clause\n\t~a\n\t~a\n\t~a\n\t~a" cls v k cont))
+  (match-define (handler-clause arg-name k-name body saved-env) cls)
+  (eval body
+        (extend-env k-name k
+                    (extend-env arg-name v saved-env))
+        cont))
+
+;; continuation * value -> value
 (define (apply-cont cont v)
+  (displayln (format "apply-cont\n\t~a\n\t~a" cont v))
   (match cont
     [(end-cont) v]
-    [(if-cont e1 e2 saved-env cont)
+    [(if-cont e1 e2 saved-env saved-cont)
      (if v
-         (eval e1 saved-env cont)
-         (eval e2 saved-env cont))]
-    [(app-cont1 e saved-env cont)
-     'todo]
-    [_ (error 'todo)]))
+         (eval e1 saved-env saved-cont)
+         (eval e2 saved-env saved-cont))]
+    [(add-cont1 e saved-env saved-cont)
+     (eval e saved-env (add-cont2 v saved-cont))]
+    [(add-cont2 v1 saved-cont)
+     (apply-cont saved-cont (+ v1 v))]
+    [(continue-cont k saved-cont)
+     ;(apply-cont saved-cont (apply-cont k v))]
+     (apply-cont (compose-cont saved-cont k) v)]
+    [(perform-cont op saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op saved-cont))
+     (apply-handler-clause clause v E2 E1)]
+    [(app-cont1 e saved-env saved-cont)
+     (eval e saved-env (app-cont2 v saved-cont))]
+    [(app-cont2 v1 saved-cont)
+     (apply-closure v1 v saved-cont)]
+    [(handler-cont handler saved-cont)
+     (apply-cont saved-cont v)]
+    [_ (error 'todo (format "~a" cont))]))
 
 (define (eval e env cont)
+  (displayln (format "eval\n\t~a\n\ta~a\n\t~a" e env cont))
   (match e
     ['() (apply-cont cont '())]
     [(? number? n) (apply-cont cont n)]
     [(? symbol? x) (apply-cont cont (apply-env env x))]
+    [`(lambda (,(? symbol? x)) ,body)
+     (apply-cont cont (closure x body env))]
+    [`(+ ,e1 ,e2)
+     (eval e1 env (add-cont1 e2 env cont))]
     [`(if ,e1 ,e2 ,e3)
      (eval e1 env (if-cont e2 e3 env cont))]
-    [`(perform ,op ,arg) 'todo]
-    [`(continue ,k ,e) 'todo]
-    [`(,f ,arg) 'todo]
+    [`(perform ,op ,arg)
+     (eval arg env (perform-cont op cont))]
+    [`(continue ,(? symbol? k) ,e)
+     (define k-val (apply-env env k))
+     (eval e env (continue-cont k-val cont))]
+    [`(,f ,arg)
+     (eval f env (app-cont1 arg env cont))]
     [`(handle ([(,ops ,xs ,ks) ,es] ...) ,body)
      (define clauses (for/list ([op ops] [x xs] [k ks] [e es])
-       (cons op (handler-clause x k e env))))
+                       (cons op (handler-clause x k e env))))
      (define new-cont
        (handler-cont (handler clauses) cont))
      (eval body env new-cont)]
@@ -181,4 +284,22 @@
 
 (check-equal? (eval-closed 1) 1)
 
-; (check-equal? (eval 'x (extend-env 'x 1 (empty-env)) (empty-stack)) 1)
+(check-equal? (eval-closed '()) '())
+
+(define t1 '(handle ([(get _ k) (continue k 1)]) (perform get ())))
+(check-equal? (eval-closed t1) 1)
+
+(define t2 '(handle ([(get _ k) (continue k 1)]) (+ (perform get ()) (perform get ()))))
+(check-equal? (eval-closed t2) 2)
+
+(define t3
+  '(handle ([(get1 _ k) (continue k 1)])
+           (handle ([(get2 _ k) (continue k 2)])
+           (+ (perform get1 ()) (perform get2 ())))))
+(check-equal? (eval-closed t3) 3)
+
+(define t4
+  '(handle ([(get1 _ k) (continue k 1)])
+           (handle ([(get2 _ k) (continue k 2)])
+           (+ (perform get2 ()) (perform get1 ())))))
+(check-equal? (eval-closed t3) 3)
