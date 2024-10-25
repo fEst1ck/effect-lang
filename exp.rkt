@@ -4,6 +4,19 @@
 
 (define debug #f)
 
+;; empty-env : -> Env
+(define (empty-env) '())
+
+;; extend-env : Var * Value * Env -> Value
+(define (extend-env x v env)
+  (cons (cons x v) env))
+
+;; extend-letrec-env : Name * Name * Term * Env -> Env
+;; (apply (extend-letrec-env f x e env) f) = (extend-letrec-env f x e env)
+(define (extend-letrec-env f x e env)
+  (extend-env f (closure x e (delay (extend-letrec-env f x e env)))
+              env))
+
 ;; apply-env : Env * Name -> Value
 (define (apply-env env x)
   (let ([res? (assoc x env)])
@@ -57,20 +70,6 @@
    cont-body ; computation
    env ; env
    ) #:transparent)
-
-;; empty-env : -> Env
-(define (empty-env) '())
-
-;; extend-env : Var * Value * Env -> Value
-(define (extend-env x v env)
-  (cons (cons x v) env))
-
-;; extend-letrec-env : Name * Name * Term * Env -> Env
-;; (apply (extend-letrec-env f x e env) f) = (extend-letrec-env f x e env)
-(define (extend-letrec-env f x e env)
-  (extend-env f (closure x e (delay (extend-letrec-env f x e env)))
-              env))
-  
 
 ;; □
 (define (empty-stack) '())
@@ -329,9 +328,17 @@
 (define (eval-closed e)
   (eval e (empty-env) (end-cont)))
 
+;; sanity checks
 (check-equal? (eval-closed 1) 1)
 
+(check-equal? (eval-closed #t) #t)
+
 (check-equal? (eval-closed '(let (x 42) x)) 42)
+
+(test-begin
+ (define test-rec
+   '(letrec ((f n) (if (< 0 n) (+ n (f (+ n -1))) 0)) (f 3)))
+ (check-equal? (eval-closed test-rec) 6))
 
 (define t1 '(handle ([(get _ k) (continue k 1)]) (perform get ())))
 (check-equal? (eval-closed t1) 1)
@@ -355,7 +362,3 @@
   '(handle ([(throw _ k) -1])
            (+ 42 (perform throw ()))))
 (check-equal? (eval-closed t5) -1)
-
-(define test-rec
-  '(letrec ((f n) (if (< 0 n) (+ n (f (+ n -1))) 0)) (f 3)))
-(check-equal? (eval-closed test-rec) 6)
