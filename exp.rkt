@@ -2,6 +2,8 @@
 
 (require rackunit)
 
+(define debug #f)
+
 ;; apply-env : Env * Name -> Value
 (define (apply-env env x)
   (let ([res? (assoc x env)])
@@ -29,7 +31,8 @@
 
 ;; closure * value * continuation -> value
 (define (apply-closure cls v cont)
-  (match-define (closure arg body saved-env) cls)
+  (match-define (closure arg body saved-env^) cls)
+  (define saved-env (force saved-env^))
   (eval body
         (extend-env arg v saved-env)
         cont))
@@ -61,6 +64,13 @@
 ;; extend-env : Var * Value * Env -> Value
 (define (extend-env x v env)
   (cons (cons x v) env))
+
+;; extend-letrec-env : Name * Name * Term * Env -> Env
+;; (apply (extend-letrec-env f x e env) f) = (extend-letrec-env f x e env)
+(define (extend-letrec-env f x e env)
+  (extend-env f (closure x e (delay (extend-letrec-env f x e env)))
+              env))
+  
 
 ;; □
 (define (empty-stack) '())
@@ -104,8 +114,17 @@
 ;; □
 (struct end-cont () #:transparent)
 
-;; (if-cont □ e1 e2)
+;; (if □ e1 e2)
 (struct if-cont (e1 e2 saved-env saved-cont) #:transparent)
+
+;; (let (x □) e)
+(struct let-cont (x e saved-env saved-cont) #:transparent)
+
+;; (< □ e)
+(struct lt-cont1 (e saved-env saved-cont) #:transparent)
+
+;; (< v □)
+(struct lt-cont2 (v saved-cont) #:transparent)
 
 ;; (+ □ e)
 (struct add-cont1 (e saved-env saved-cont) #:transparent)
@@ -151,9 +170,18 @@
     [(add-cont2 v saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (add-cont2 v E2) clause)]
+    [(lt-cont1 e saved-env saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (lt-cont1 e saved-env E2) clause)]
+    [(lt-cont2 v saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (lt-cont2 v E2) clause)]
     [(if-cont e1 e2 saved-env saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (if-cont e1 e2 saved-env E2) clause)]
+    [(let-cont x e saved-env saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (let-cont x e saved-env E2) clause)]
     [(app-cont1 e2 saved-env saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (app-cont1 e2 saved-env E2) clause)]
@@ -182,8 +210,14 @@
      (add-cont1 e saved-env (compose-cont cont1 saved-cont))]
     [(add-cont2 v saved-cont)
      (add-cont2 v (compose-cont cont1 saved-cont))]
+    [(lt-cont1 e saved-env saved-cont)
+     (lt-cont1 e saved-env (compose-cont cont1 saved-cont))]
+    [(lt-cont2 v saved-cont)
+     (lt-cont2 v (compose-cont cont1 saved-cont))]
     [(if-cont e1 e2 saved-env saved-cont)
      (if-cont e1 e2 saved-env (compose-cont cont1 saved-cont))]
+    [(let-cont x e saved-env saved-cont)
+     (let-cont x e saved-env (compose-cont cont1 saved-cont))]
     [(app-cont1 e2 saved-env saved-cont)
      (app-cont1 e2 saved-env (compose-cont cont1 saved-cont))]
     [(app-cont2 v saved-cont)
@@ -218,7 +252,7 @@
 
 ;; handler-clause * value * continuation * continuation -> value
 (define (apply-handler-clause cls v k cont)
-  (displayln (format "apply-handler-clause\n\t~a\n\t~a\n\t~a\n\t~a" cls v k cont))
+  (when debug (displayln (format "apply-handler-clause\n\t~a\n\t~a\n\t~a\n\t~a" cls v k cont)))
   (match-define (handler-clause arg-name k-name body saved-env) cls)
   (eval body
         (extend-env k-name k
@@ -227,17 +261,23 @@
 
 ;; continuation * value -> value
 (define (apply-cont cont v)
-  (displayln (format "apply-cont\n\t~a\n\t~a" cont v))
+  (when debug (displayln (format "apply-cont\n\t~a\n\t~a" cont v)))
   (match cont
     [(end-cont) v]
     [(if-cont e1 e2 saved-env saved-cont)
      (if v
          (eval e1 saved-env saved-cont)
          (eval e2 saved-env saved-cont))]
+    [(let-cont x e saved-env saved-cont)
+     (eval e (extend-env x v saved-env) saved-cont)]
     [(add-cont1 e saved-env saved-cont)
      (eval e saved-env (add-cont2 v saved-cont))]
     [(add-cont2 v1 saved-cont)
      (apply-cont saved-cont (+ v1 v))]
+    [(lt-cont1 e saved-env saved-cont)
+     (eval e saved-env (lt-cont2 v saved-cont))]
+    [(lt-cont2 v1 saved-cont)
+     (apply-cont saved-cont (< v1 v))]
     [(continue-cont k saved-cont)
      ;(apply-cont saved-cont (apply-cont k v))]
      (apply-cont (compose-cont saved-cont k) v)]
@@ -253,19 +293,26 @@
     [_ (error 'todo (format "~a" cont))]))
 
 (define (eval e env cont)
-  (displayln (format "eval\n\t~a\n\ta~a\n\t~a" e env cont))
+  (when debug (displayln (format "eval\n\t~a\n\ta~a\n\t~a" e env cont)))
   (match e
     ['() (apply-cont cont '())]
+    [(? boolean? v) v]
     [(? number? n) (apply-cont cont n)]
     [(? symbol? x) (apply-cont cont (apply-env env x))]
     [`(lambda (,(? symbol? x)) ,body)
      (apply-cont cont (closure x body env))]
+    [`(< ,e1 ,e2)
+     (eval e1 env (lt-cont1 e2 env cont))]
     [`(+ ,e1 ,e2)
      (eval e1 env (add-cont1 e2 env cont))]
     [`(if ,e1 ,e2 ,e3)
      (eval e1 env (if-cont e2 e3 env cont))]
     [`(perform ,op ,arg)
      (eval arg env (perform-cont op cont))]
+    [`(let (,x ,e) ,body)
+     (eval e env (let-cont x body env cont))]
+    [`(letrec ((,(? symbol? f) ,(? symbol? x)) ,e) ,body)
+     (eval body (extend-letrec-env f x e env) cont)]
     [`(continue ,(? symbol? k) ,e)
      (define k-val (apply-env env k))
      (eval e env (continue-cont k-val cont))]
@@ -277,14 +324,14 @@
      (define new-cont
        (handler-cont (handler clauses) cont))
      (eval body env new-cont)]
-    [_ (error 'bad-syntax)]))
+    [_ (error 'bad-syntax (format "~a" e))]))
 
 (define (eval-closed e)
   (eval e (empty-env) (end-cont)))
 
 (check-equal? (eval-closed 1) 1)
 
-(check-equal? (eval-closed '()) '())
+(check-equal? (eval-closed '(let (x 42) x)) 42)
 
 (define t1 '(handle ([(get _ k) (continue k 1)]) (perform get ())))
 (check-equal? (eval-closed t1) 1)
@@ -295,11 +342,20 @@
 (define t3
   '(handle ([(get1 _ k) (continue k 1)])
            (handle ([(get2 _ k) (continue k 2)])
-           (+ (perform get1 ()) (perform get2 ())))))
+                   (+ (perform get1 ()) (perform get2 ())))))
 (check-equal? (eval-closed t3) 3)
 
 (define t4
   '(handle ([(get1 _ k) (continue k 1)])
            (handle ([(get2 _ k) (continue k 2)])
-           (+ (perform get2 ()) (perform get1 ())))))
-(check-equal? (eval-closed t3) 3)
+                   (+ (perform get2 ()) (perform get1 ())))))
+(check-equal? (eval-closed t4) 3)
+
+(define t5
+  '(handle ([(throw _ k) -1])
+           (+ 42 (perform throw ()))))
+(check-equal? (eval-closed t5) -1)
+
+(define test-rec
+  '(letrec ((f n) (if (< 0 n) (+ n (f (+ n -1))) 0)) (f 3)))
+(check-equal? (eval-closed test-rec) 6)
