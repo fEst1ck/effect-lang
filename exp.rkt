@@ -4,6 +4,8 @@
 
 (define debug #f)
 
+;; Environment
+
 ;; empty-env : -> Env
 (define (empty-env) '())
 
@@ -35,6 +37,8 @@
 
 (check-false (in-env? 'x '((y . 0))))
 
+;; Closure
+
 ;; function closure
 (struct closure
   (arg ; arg name : symbol?
@@ -49,36 +53,6 @@
   (eval body
         (extend-env arg v saved-env)
         cont))
-
-;; handler closure
-(struct handler-closure
-  (
-   ;x ; x name : symbol?
-   ;k ; k name : symbol?
-   xks ; Listof (Pair x k)
-   body ; comp : computation
-   env ; env
-   ) #:transparent)
-
-;; Result of a computation
-(struct return (val) #:transparent)
-
-(struct op
-  (op-name ; symbol
-   op-val ; value
-   cont-name ; symbol
-   cont-body ; computation
-   env ; env
-   ) #:transparent)
-
-;; □
-(define (empty-stack) '())
-
-(define stack-empty? empty?)
-
-(define stack-top car)
-
-(define stack-rest cdr)
 
 (struct handler-clause (x k body env) #:transparent)
 
@@ -108,7 +82,7 @@
 (check-equal? (handles? handler-1 'oops)
               #f)
 
-;; continuation builders
+;; Continuation Builder
 
 ;; □
 (struct end-cont () #:transparent)
@@ -228,26 +202,27 @@
     [(handler-cont handler saved-cont)
      (handler-cont handler (compose-cont cont1 saved-cont))]))
 
-(define-values (E1 E2 cls)
-  (capture-handler
-   'op
-   ;; (if (handle handler-1 (if [] 0 1)) 2 3)
-   (if-cont 0 1 (empty-env)
-            (handler-cont handler-1
-                          (if-cont 2 3 (empty-env)
-                                   (end-cont))))))
+(test-begin
+ (define-values (E1 E2 cls)
+   (capture-handler
+    'op
+    ;; (if (handle handler-1 (if [] 0 1)) 2 3)
+    (if-cont 0 1 (empty-env)
+             (handler-cont handler-1
+                           (if-cont 2 3 (empty-env)
+                                    (end-cont))))))
 
-(check-equal?
- E1
- ;; (if □ 2 3)
- (if-cont 2 3 (empty-env) (end-cont)))
+ (check-equal?
+  E1
+  ;; (if □ 2 3)
+  (if-cont 2 3 (empty-env) (end-cont)))
 
-(check-equal?
- E2
- ;; (handle handler-1 (if [] 0 1))
- (if-cont 0 1 (empty-env) (handler-cont handler-1 (end-cont))))
+ (check-equal?
+  E2
+  ;; (handle handler-1 (if [] 0 1))
+  (if-cont 0 1 (empty-env) (handler-cont handler-1 (end-cont))))
 
-(check-equal? cls (handler-clause 'x 'k 42 (empty-env)))
+ (check-equal? cls (handler-clause 'x 'k 42 (empty-env))))
 
 ;; handler-clause * value * continuation * continuation -> value
 (define (apply-handler-clause cls v k cont)
@@ -291,6 +266,7 @@
      (apply-cont saved-cont v)]
     [_ (error 'todo (format "~a" cont))]))
 
+;; core interpreter logic
 (define (eval e env cont)
   (when debug (displayln (format "eval\n\t~a\n\ta~a\n\t~a" e env cont)))
   (match e
