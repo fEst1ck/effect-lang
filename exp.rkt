@@ -7,9 +7,11 @@
 ;; Environment
 
 ;; empty-env : -> Env
+;; creates an empty environment
 (define (empty-env) '())
 
-;; extend-env : Var * Value * Env -> Value
+;; extend-env : Name * Value * Env -> Value
+;; extends an environment with a name and value
 (define (extend-env x v env)
   (cons (cons x v) env))
 
@@ -54,8 +56,10 @@
         (extend-env arg v saved-env)
         cont))
 
+;; [(x k) body]
 (struct handler-clause (x k body env) #:transparent)
 
+;; ([(x k) body] ...)
 (struct handler (
                  clauses ; list of pair of op-name to handler-clause
                  ) #:transparent)
@@ -93,6 +97,12 @@
 ;; (let (x □) e)
 (struct let-cont (x e saved-env saved-cont) #:transparent)
 
+;; (car □)
+(struct car-cont (saved-cont) #:transparent)
+
+;; (cdr □)
+(struct cdr-cont (saved-cont) #:transparent)
+
 ;; (< □ e)
 (struct lt-cont1 (e saved-env saved-cont) #:transparent)
 
@@ -104,6 +114,12 @@
 
 ;; (+ v □)
 (struct add-cont2 (v saved-cont) #:transparent)
+
+;; (cons □ e)
+(struct cons-cont1 (e saved-env saved-cont) #:transparent)
+
+;; (cons v □)
+(struct cons-cont2 (v saved-cont) #:transparent)
 
 ;; (□ e)
 (struct app-cont1 (e saved-env saved-cont) #:transparent)
@@ -137,6 +153,12 @@
 (define (capture-handler op-name cont)
   (match cont
     [(end-cont) (error (format "unhandled op: ~a" op-name))]
+    [(car-cont saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (car-cont E2) clause)]
+    [(cdr-cont saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (cdr-cont E2) clause)]
     [(add-cont1 e saved-env saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (add-cont1 e saved-env E2) clause)]
@@ -149,6 +171,12 @@
     [(lt-cont2 v saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (lt-cont2 v E2) clause)]
+    [(cons-cont1 e saved-env saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (cons-cont1 e saved-env E2) clause)]
+    [(cons-cont2 v saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (cons-cont2 v E2) clause)]
     [(if-cont e1 e2 saved-env saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (if-cont e1 e2 saved-env E2) clause)]
@@ -179,6 +207,10 @@
 (define (compose-cont cont1 cont2)
   (match cont2
     [(end-cont) cont1]
+    [(car-cont saved-cont)
+     (car-cont (compose-cont cont1 saved-cont))]
+    [(cdr-cont saved-cont)
+     (cdr-cont (compose-cont cont1 saved-cont))]
     [(add-cont1 e saved-env saved-cont)
      (add-cont1 e saved-env (compose-cont cont1 saved-cont))]
     [(add-cont2 v saved-cont)
@@ -187,6 +219,10 @@
      (lt-cont1 e saved-env (compose-cont cont1 saved-cont))]
     [(lt-cont2 v saved-cont)
      (lt-cont2 v (compose-cont cont1 saved-cont))]
+    [(cons-cont1 e saved-env saved-cont)
+     (cons-cont1 e saved-env (compose-cont cont1 saved-cont))]
+    [(cons-cont2 v saved-cont)
+     (cons-cont2 v (compose-cont cont1 saved-cont))]
     [(if-cont e1 e2 saved-env saved-cont)
      (if-cont e1 e2 saved-env (compose-cont cont1 saved-cont))]
     [(let-cont x e saved-env saved-cont)
@@ -238,6 +274,8 @@
   (when debug (displayln (format "apply-cont\n\t~a\n\t~a" cont v)))
   (match cont
     [(end-cont) v]
+    [(car-cont saved-cont) (apply-cont saved-cont (car v))]
+    [(cdr-cont saved-cont) (apply-cont saved-cont (cdr v))]
     [(if-cont e1 e2 saved-env saved-cont)
      (if v
          (eval e1 saved-env saved-cont)
@@ -252,6 +290,10 @@
      (eval e saved-env (lt-cont2 v saved-cont))]
     [(lt-cont2 v1 saved-cont)
      (apply-cont saved-cont (< v1 v))]
+    [(cons-cont1 e saved-env saved-cont)
+     (eval e saved-env (cons-cont2 v saved-cont))]
+    [(cons-cont2 v1 saved-cont)
+     (apply-cont saved-cont (cons v1 v))]
     [(continue-cont k saved-cont)
      ;(apply-cont saved-cont (apply-cont k v))]
      (apply-cont (compose-cont saved-cont k) v)]
@@ -268,18 +310,25 @@
 
 ;; core interpreter logic
 (define (eval e env cont)
-  (when debug (displayln (format "eval\n\t~a\n\ta~a\n\t~a" e env cont)))
+  (when debug (displayln (format "eval\n\t~a\n\t~a\n\t~a" e env cont)))
   (match e
     ['() (apply-cont cont '())]
-    [(? boolean? v) v]
+    [(? boolean? v) (apply-cont cont v)]
     [(? number? n) (apply-cont cont n)]
+    [(? string? s) (apply-cont cont s)]
     [(? symbol? x) (apply-cont cont (apply-env env x))]
     [`(lambda (,(? symbol? x)) ,body)
      (apply-cont cont (closure x body env))]
+    [`(car ,e)
+     (eval e env (car-cont cont))]
+    [`(cdr ,e)
+     (eval e env (cdr-cont cont))]
     [`(< ,e1 ,e2)
      (eval e1 env (lt-cont1 e2 env cont))]
     [`(+ ,e1 ,e2)
      (eval e1 env (add-cont1 e2 env cont))]
+    [`(cons ,e1 ,e2)
+     (eval e1 env (cons-cont1 e2 env cont))]
     [`(if ,e1 ,e2 ,e3)
      (eval e1 env (if-cont e2 e3 env cont))]
     [`(perform ,op ,arg)
@@ -311,6 +360,10 @@
 
 (check-equal? (eval-closed '(let (x 42) x)) 42)
 
+(check-equal? (eval-closed '(cons 1 ())) (cons 1 '()))
+
+(check-equal? (eval-closed '(car (cons #t #f))) #t)
+
 (test-begin
  (define test-rec
    '(letrec ((f n) (if (< 0 n) (+ n (f (+ n -1))) 0)) (f 3)))
@@ -338,3 +391,40 @@
   '(handle ([(throw _ k) -1])
            (+ 42 (perform throw ()))))
 (check-equal? (eval-closed t5) -1)
+
+;; examples from An Introduction to Algebriac Effect Handlers by Matija Pretnar
+(define print-full-name
+  `(let (_ (peform print "What is your forename?"))
+     (let (forename (perform read ()))
+       (let (_ (perform (print "What is your surname?")))
+         (let (surname (perform read ()))
+           (let (_ (perform print forename))
+             (let (_ (perform print surname))
+               (perform return ()))))))))
+
+(define choose
+  '(lambda (x)
+     (lambda (y)
+       (let (b (perform decide #f))
+         (if b x y)))))
+
+(define choose-sum
+  `(let (choose ,choose)
+    (let (x ((choose 15) 30))
+     (let (y ((choose 5) 10))
+       (+ x y)))))
+
+(define pick-true
+  '([(decide _ k) (continue k #t)]))
+
+(check-equal? (eval-closed `(handle ,pick-true ((,choose 1) 2))) 1)
+
+(check-equal? (eval-closed `(handle ,pick-true ,choose-sum)) 20)
+
+(define pick-max
+  '([(decide _ k)
+     (let [t (continue k #t)]
+       (let [f (continue k #f)]
+         (if (< t f) f t)))]))
+
+(check-equal? (eval-closed `(handle ,pick-max ,choose-sum)) 40)
