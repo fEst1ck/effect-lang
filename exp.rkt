@@ -2,7 +2,7 @@
 
 (require rackunit)
 
-(define debug #f)
+(define debug #t)
 
 ;; Environment
 
@@ -109,13 +109,25 @@
 ;; (< v □)
 (struct lt-cont2 (v saved-cont) #:transparent)
 
+;; (= □ e)
+(struct eq-cont1 (e saved-env saved-cont) #:transparent)
+
+;; (= v □)
+(struct eq-cont2 (v saved-cont) #:transparent)
+
 ;; (+ □ e)
 (struct add-cont1 (e saved-env saved-cont) #:transparent)
 
 ;; (+ v □)
 (struct add-cont2 (v saved-cont) #:transparent)
 
-;; (cons □ e)
+;; (* □ e)
+(struct mul-cont1 (e saved-env saved-cont) #:transparent)
+
+;; (* v □)
+(struct mul-cont2 (v saved-cont) #:transparent)
+
+;;(cons □ e)
 (struct cons-cont1 (e saved-env saved-cont) #:transparent)
 
 ;; (cons v □)
@@ -165,12 +177,24 @@
     [(add-cont2 v saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (add-cont2 v E2) clause)]
+    [(mul-cont1 e saved-env saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (mul-cont1 e saved-env E2) clause)]
+    [(mul-cont2 v saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (mul-cont2 v E2) clause)]
     [(lt-cont1 e saved-env saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (lt-cont1 e saved-env E2) clause)]
     [(lt-cont2 v saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (lt-cont2 v E2) clause)]
+    [(eq-cont1 e saved-env saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (eq-cont1 e saved-env E2) clause)]
+    [(eq-cont2 v saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (eq-cont2 v E2) clause)]
     [(cons-cont1 e saved-env saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (cons-cont1 e saved-env E2) clause)]
@@ -215,10 +239,18 @@
      (add-cont1 e saved-env (compose-cont cont1 saved-cont))]
     [(add-cont2 v saved-cont)
      (add-cont2 v (compose-cont cont1 saved-cont))]
+    [(mul-cont1 e saved-env saved-cont)
+     (mul-cont1 e saved-env (compose-cont cont1 saved-cont))]
+    [(mul-cont2 v saved-cont)
+     (mul-cont2 v (compose-cont cont1 saved-cont))]
     [(lt-cont1 e saved-env saved-cont)
      (lt-cont1 e saved-env (compose-cont cont1 saved-cont))]
     [(lt-cont2 v saved-cont)
      (lt-cont2 v (compose-cont cont1 saved-cont))]
+    [(eq-cont1 e saved-env saved-cont)
+     (eq-cont1 e saved-env (compose-cont cont1 saved-cont))]
+    [(eq-cont2 v saved-cont)
+     (eq-cont2 v (compose-cont cont1 saved-cont))]
     [(cons-cont1 e saved-env saved-cont)
      (cons-cont1 e saved-env (compose-cont cont1 saved-cont))]
     [(cons-cont2 v saved-cont)
@@ -286,10 +318,18 @@
      (eval e saved-env (add-cont2 v saved-cont))]
     [(add-cont2 v1 saved-cont)
      (apply-cont saved-cont (+ v1 v))]
+    [(mul-cont1 e saved-env saved-cont)
+     (eval e saved-env (mul-cont2 v saved-cont))]
+    [(mul-cont2 v1 saved-cont)
+     (apply-cont saved-cont (* v1 v))]
     [(lt-cont1 e saved-env saved-cont)
      (eval e saved-env (lt-cont2 v saved-cont))]
     [(lt-cont2 v1 saved-cont)
      (apply-cont saved-cont (< v1 v))]
+    [(eq-cont1 e saved-env saved-cont)
+     (eval e saved-env (eq-cont2 v saved-cont))]
+    [(eq-cont2 v1 saved-cont)
+     (apply-cont saved-cont (= v1 v))]
     [(cons-cont1 e saved-env saved-cont)
      (eval e saved-env (cons-cont2 v saved-cont))]
     [(cons-cont2 v1 saved-cont)
@@ -325,8 +365,12 @@
      (eval e env (cdr-cont cont))]
     [`(< ,e1 ,e2)
      (eval e1 env (lt-cont1 e2 env cont))]
+    [`(= ,e1 ,e2)
+     (eval e1 env (eq-cont1 e2 env cont))]
     [`(+ ,e1 ,e2)
      (eval e1 env (add-cont1 e2 env cont))]
+    [`(* ,e1 ,e2)
+     (eval e1 env (mul-cont1 e2 env cont))]
     [`(cons ,e1 ,e2)
      (eval e1 env (cons-cont1 e2 env cont))]
     [`(if ,e1 ,e2 ,e3)
@@ -355,6 +399,18 @@
 
 ;; sanity checks
 (check-equal? (eval-closed 1) 1)
+
+(check-equal? (eval-closed '(+ 1 1)) 2)
+
+(check-equal? (eval-closed '(* 2 3)) 6)
+
+(check-equal? (eval-closed '(< 1 2)) #t)
+
+(check-equal? (eval-closed '(< 2 1)) #f)
+
+(check-equal? (eval-closed '(= 1 1)) #t)
+
+(check-equal? (eval-closed '(= 2 1)) #f)
 
 (check-equal? (eval-closed #t) #t)
 
@@ -410,9 +466,9 @@
 
 (define choose-sum
   `(let (choose ,choose)
-    (let (x ((choose 15) 30))
-     (let (y ((choose 5) 10))
-       (+ x y)))))
+     (let (x ((choose 15) 30))
+       (let (y ((choose 5) 10))
+         (+ x y)))))
 
 (define pick-true
   '([(decide _ k) (continue k #t)]))
@@ -428,3 +484,57 @@
          (if (< t f) f t)))]))
 
 (check-equal? (eval-closed `(handle ,pick-max ,choose-sum)) 40)
+
+(define choose-int
+  '(lambda (m)
+     (lambda (n)
+       (letrec [(helper m)
+                (if (< n m)
+                    (perform fail ())
+                    (let [b (perform decide ())]
+                      (if b m (helper (+ m 1)))))]
+         (helper m)))))
+
+(define is-sqr?
+  '(lambda (n)
+     (letrec ([helper k] (if (< n k)
+                             #f
+                             (if (= (* k k) n)
+                                 #t
+                                 (helper (+ k 1)))))
+       (helper 0))))
+
+(check-equal? (eval-closed `(,is-sqr? 3)) #f)
+
+(check-equal? (eval-closed `(,is-sqr? 4)) #t)
+
+(define pythagorean
+  `(lambda (m)
+     (lambda (n)
+       (let [a ((,choose-int m) (+ n -1))]
+         (let [b ((,choose-int (+ a 1)) n)]
+           (if (,is-sqr? (+ (* a a) (* b b)))
+                         (cons a b)
+                         (perform fail ())))))))
+
+(define backtrack
+  '([(decide _ k)
+     (handle
+      ([(fail _ _) (continue k #f)])
+      (continue k #t))]))
+
+(check-equal? (eval-closed `(handle ,backtrack ((,pythagorean 4) 15))) (cons 5 12))
+
+(define state
+  '([(get _ k) (lambda (s) ((continue k s) s))]
+    [(set s k) (lambda (s) ((continue k ()) s))]
+    [(return x _) (lambda (_) x)]))
+
+(define push-42
+  `((handle ,state
+           (perform return
+                    (let [s (perform get ())]
+                      (let [_ (perform set (cons 42 s))]
+                        (perform get ()))))) ()))
+
+(check-equal? (eval-closed push-42) (cons 42 '()))
