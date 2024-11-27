@@ -1,11 +1,6 @@
 #lang typed/racket
 
-(provide
- (except-out (all-from-out typed/racket)
-             #%module-begin
-             ;#%top
-             )
- (rename-out [module-begin #%module-begin]))
+(provide (all-defined-out))
 
 (require typed/rackunit)
 
@@ -462,20 +457,6 @@
 (: eval-closed (-> Term Value))
 (define (eval-closed e)
   (eval e (empty-env) (end-cont)))
-
-(define-syntax-rule (module-begin expr ...)
-  (#%module-begin
-   (eval-closed (expand-define expr ...))))
-
-(define-syntax expand-define
-  (syntax-rules ()
-    [(_ expr) `expr]
-    [(_ (define x e) expr ...)
-     `(let (x e)
-        ,(expand-define expr ...))]
-    [(_ expr1 expr ...)
-     `(let (_ expr1)
-        ,(expand-define expr ...))]))
 
 ;; sanity checks
 (check-equal? (eval-closed 1) 1)
