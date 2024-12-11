@@ -11,15 +11,15 @@
 
 (define-syntax-rule (module-begin expr ...)
   (#%module-begin
-   (eval-closed (expand-define expr ...))))
+   (expand-define expr ...)))
 
 (define-syntax-rule (top-interaction . expr)
   (eval-closed `expr))
 
 (define-syntax expand-define
-  (syntax-rules ()
+  (syntax-rules (def)
     [(_ expr) `expr]
-    [(_ (define x e) expr ...)
+    [(_ (def x e) expr ...)
      `(let (x e)
         ,(expand-define expr ...))]
     [(_ expr1 expr ...)

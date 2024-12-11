@@ -2,7 +2,8 @@
 
 (provide (all-defined-out))
 
-(require typed/rackunit)
+(module+ test
+  (require typed/rackunit))
 
 (define debug #f)
 
@@ -36,18 +37,18 @@
     (if res? (cdr res?)
         (error 'appy-env "~a doesn't exist in the environment" x))))
 
-(check-equal? (apply-env '((x . 1)) 'x) 1)
-
-(check-exn exn:fail? (lambda () (apply-env '((x . 1)) 'y)))
+(module+ test
+  (check-equal? (apply-env '((x . 1)) 'x) 1)
+  (check-exn exn:fail? (lambda () (apply-env '((x . 1)) 'y))))
 
 ;; in-env? : Name * Env -> Bool
 (: in-env? (-> Name Env Boolean))
 (define (in-env? x env)
   (if (assoc x env) #t #f))
 
-(check-not-false (in-env? 'x '((x . 1))))
-
-(check-false (in-env? 'x '((y . 0))))
+(module+ test
+  (check-not-false (in-env? 'x '((x . 1))))
+  (check-false (in-env? 'x '((y . 0)))))
 
 ;; Closure
 
@@ -96,11 +97,12 @@
 
 (define handler-1 (handler `((op . ,(handler-clause 'x 'k 42 (empty-env))))))
 
-(check-equal? (handles? handler-1 'op)
-              (handler-clause 'x 'k 42 (empty-env)))
+(module+ test
+  (check-equal? (handles? handler-1 'op)
+                (handler-clause 'x 'k 42 (empty-env)))
 
-(check-equal? (handles? handler-1 'oops)
-              #f)
+  (check-equal? (handles? handler-1 'oops)
+                #f))
 
 (define-type Term
   (U Number
@@ -117,6 +119,7 @@
   (U end-cont
      if-cont
      let-cont
+     print-cont
      car-cont
      cdr-cont
      lt-cont1
@@ -132,6 +135,8 @@
      app-cont1
      app-cont2
      perform-cont
+     with-cont1
+     with-cont2
      handler-cont
      continue-cont))
 
@@ -143,6 +148,9 @@
 
 ;; (let (x □) e)
 (struct let-cont ([x : Name] [e : Term] [saved-env : Env] [saved-cont : Cont]) #:transparent)
+
+;; (print □)
+(struct print-cont ([saved-cont : Cont]) #:transparent)
 
 ;; (car □)
 (struct car-cont ([saved-cont : Cont]) #:transparent)
@@ -174,7 +182,7 @@
 ;; (* v □)
 (struct mul-cont2 ([v : Value] [saved-cont : Cont]) #:transparent)
 
-;;(cons □ e)
+;; (cons □ e)
 (struct cons-cont1 ([e : Term] [saved-env : Env] [saved-cont : Cont]) #:transparent)
 
 ;; (cons v □)
@@ -189,7 +197,20 @@
 ;; (perform op □)
 (struct perform-cont ([op : Name] [saved-cont : Cont]) #:transparent)
 
-;; (with handler □)
+;; (with □ e)
+(struct with-cont1
+  ([e : Term]
+   [saved-env : Env]
+   [saved-cont : Cont])
+  #:transparent)
+
+;; (with v □)
+(struct with-cont2
+  ([v : Value]
+   [saved-cont : Cont])
+  #:transparent)
+
+;; (handle handler □)
 (struct handler-cont
   ([handler : handler]
    [saved-cont : Cont])
@@ -212,6 +233,9 @@
 (define (capture-handler op-name cont)
   (match cont
     [(end-cont) (error (format "unhandled op: ~a" op-name))]
+    [(print-cont saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (print-cont E2) clause)]
     [(car-cont saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (car-cont E2) clause)]
@@ -266,6 +290,16 @@
     [(perform-cont op saved-cont)
      (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
      (values E1 (perform-cont op E2) clause)]
+    [(with-cont1 e saved-env saved-cont)
+     (define-values (E1 E2 clause) (capture-handler op-name saved-cont))
+     (values E1 (with-cont1 e saved-env E2) clause)]
+    [(with-cont2 v saved-cont)
+     (define h (cast v handler))
+     (define clause? (handles? h op-name))
+     (if clause?
+         (values saved-cont (handler-cont h (end-cont)) clause?)
+         (let-values ([(E1 E2 clause) (capture-handler op-name saved-cont)])
+           (values E1 (handler-cont h E2) clause)))]
     [(handler-cont handler saved-cont)
      (define clause? (handles? handler op-name))
      (if clause?
@@ -279,6 +313,8 @@
 (define (compose-cont cont1 cont2)
   (match cont2
     [(end-cont) cont1]
+    [(print-cont saved-cont)
+     (print-cont (compose-cont cont1 saved-cont))]
     [(car-cont saved-cont)
      (car-cont (compose-cont cont1 saved-cont))]
     [(cdr-cont saved-cont)
@@ -315,30 +351,37 @@
      (continue-cont k (compose-cont cont1 saved-cont))]
     [(perform-cont op saved-cont)
      (perform-cont op (compose-cont cont1 saved-cont))]
+    [(with-cont1 e saved-env saved-cont)
+     (with-cont1 e saved-env (compose-cont cont1 saved-cont))]
+    [(with-cont2 v saved-cont)
+     (with-cont2 v (compose-cont cont1 saved-cont))]
     [(handler-cont handler saved-cont)
      (handler-cont handler (compose-cont cont1 saved-cont))]))
 
-(test-begin
- (define-values (E1 E2 cls)
-   (capture-handler
-    'op
-    ;; (if (handle handler-1 (if [] 0 1)) 2 3)
-    (if-cont 0 1 (empty-env)
-             (handler-cont handler-1
-                           (if-cont 2 3 (empty-env)
-                                    (end-cont))))))
+(module+ test
+  (test-begin
+   (define-values (E1 E2 cls)
+     (capture-handler
+      'op
+      ;; (if (handle handler-1 (if [] 0 1)) 2 3)
+      (if-cont 0 1 (empty-env)
+               (handler-cont handler-1
+                             (if-cont 2 3 (empty-env)
+                                      (end-cont))))))
 
- (check-equal?
-  E1
-  ;; (if □ 2 3)
-  (if-cont 2 3 (empty-env) (end-cont)))
+   (check-equal?
+    E1
+    ;; (if □ 2 3)
+    (if-cont 2 3 (empty-env) (end-cont)))
 
- (check-equal?
-  E2
-  ;; (handle handler-1 (if [] 0 1))
-  (if-cont 0 1 (empty-env) (handler-cont handler-1 (end-cont))))
+   (check-equal?
+    E2
+    ;; (handle handler-1 (if [] 0 1))
+    (if-cont 0 1 (empty-env) (handler-cont handler-1 (end-cont))))
 
- (check-equal? cls (handler-clause 'x 'k 42 (empty-env))))
+   (check-equal? cls (handler-clause 'x 'k 42 (empty-env)))))
+
+
 
 ;; handler-clause * value * continuation * continuation -> value
 (: apply-handler-clause (-> handler-clause Value Cont Cont Value))
@@ -356,6 +399,9 @@
   (when debug (displayln (format "apply-cont\n\t~a\n\t~a" cont v)))
   (match cont
     [(end-cont) v]
+    [(print-cont saved-cont)
+     (display v)
+     (apply-cont saved-cont #f)]
     [(car-cont saved-cont) (apply-cont saved-cont (if (pair? v) (car v) (error 'type-error (format "car: expected list, got ~a" v))))]
     [(cdr-cont saved-cont) (apply-cont saved-cont (if (pair? v) (cdr v) (error 'type-error (format "cdr: expected list, got ~a" v))))]
     [(if-cont e1 e2 saved-env saved-cont)
@@ -402,7 +448,11 @@
      (eval e saved-env (app-cont2 v saved-cont))]
     [(app-cont2 v1 saved-cont)
      (apply-closure (cast v1 closure) v saved-cont)]
-    [(handler-cont handler saved-cont)
+    [(with-cont1 e saved-env saved-cont)
+     (eval e saved-env (with-cont2 v saved-cont))]
+    [(with-cont2 _handler saved-cont)
+     (apply-cont saved-cont v)]
+    [(handler-cont _handler saved-cont)
      (apply-cont saved-cont v)]
     [_ (error 'todo (format "~a" cont))]))
 
@@ -418,6 +468,8 @@
     [(? symbol? x) (apply-cont cont (apply-env env x))]
     [`(lambda (,(? symbol? x)) ,body)
      (apply-cont cont (closure x body env))]
+    [`(print ,e)
+     (eval e env (print-cont cont))]
     [`(car ,e)
      (eval e env (car-cont cont))]
     [`(cdr ,e)
@@ -443,8 +495,14 @@
     [`(continue ,(? symbol? k) ,e)
      (define k-val (apply-env env k))
      (eval e env (continue-cont (cast k-val Cont) cont))]
+    [`(handler [(,(? symbol? ops) ,(? symbol? xs) ,(? symbol? ks)) ,es] ...)
+     (: clauses (Listof (Pair Symbol handler-clause)))
+     (define clauses (for/list ([op (cast ops (Listof Symbol))] [x (cast xs (Listof Symbol))] [k (cast ks (Listof Symbol))] [e (cast es (Listof Term))])
+                       (cons op (handler-clause x k e env))))
+     (apply-cont cont (handler clauses))]
     [`(,f ,arg)
      (eval f env (app-cont1 arg env cont))]
+    [`(with ,h ,e) (eval h env (with-cont1 e env cont))]
     [`(handle ([(,(? symbol? ops) ,(? symbol? xs) ,(? symbol? ks)) ,es] ...) ,body)
      (: clauses (Listof (Pair Symbol handler-clause)))
      (define clauses (for/list ([op (cast ops (Listof Symbol))] [x (cast xs (Listof Symbol))] [k (cast ks (Listof Symbol))] [e (cast es (Listof Term))])
@@ -459,143 +517,145 @@
   (eval e (empty-env) (end-cont)))
 
 ;; sanity checks
-(check-equal? (eval-closed 1) 1)
 
-(check-equal? (eval-closed '(+ 1 1)) 2)
+(module+ test
+  (check-equal? (eval-closed 1) 1)
 
-(check-equal? (eval-closed '(* 2 3)) 6)
+  (check-equal? (eval-closed '(+ 1 1)) 2)
 
-(check-equal? (eval-closed '(< 1 2)) #t)
+  (check-equal? (eval-closed '(* 2 3)) 6)
 
-(check-equal? (eval-closed '(< 2 1)) #f)
+  (check-equal? (eval-closed '(< 1 2)) #t)
 
-(check-equal? (eval-closed '(= 1 1)) #t)
+  (check-equal? (eval-closed '(< 2 1)) #f)
 
-(check-equal? (eval-closed '(= 2 1)) #f)
+  (check-equal? (eval-closed '(= 1 1)) #t)
 
-(check-equal? (eval-closed #t) #t)
+  (check-equal? (eval-closed '(= 2 1)) #f)
 
-(check-equal? (eval-closed '(let (x 42) x)) 42)
+  (check-equal? (eval-closed #t) #t)
 
-(check-equal? (eval-closed '(cons 1 ())) (cons 1 '()))
+  (check-equal? (eval-closed '(let (x 42) x)) 42)
 
-(check-equal? (eval-closed '(car (cons #t #f))) #t)
+  (check-equal? (eval-closed '(cons 1 ())) (cons 1 '()))
 
-(test-begin
- (define test-rec
-   '(letrec ((f n) (if (< 0 n) (+ n (f (+ n -1))) 0)) (f 3)))
- (check-equal? (eval-closed test-rec) 6))
+  (check-equal? (eval-closed '(car (cons #t #f))) #t)
 
-(define t1 '(handle ([(get _ k) (continue k 1)]) (perform get ())))
-(check-equal? (eval-closed t1) 1)
+  (test-begin
+   (define test-rec
+     '(letrec ((f n) (if (< 0 n) (+ n (f (+ n -1))) 0)) (f 3)))
+   (check-equal? (eval-closed test-rec) 6))
 
-(define t2 '(handle ([(get _ k) (continue k 1)]) (+ (perform get ()) (perform get ()))))
-(check-equal? (eval-closed t2) 2)
+  (define t1 '(handle ([(get _ k) (continue k 1)]) (perform get ())))
+  (check-equal? (eval-closed t1) 1)
 
-(define t3
-  '(handle ([(get1 _ k) (continue k 1)])
-           (handle ([(get2 _ k) (continue k 2)])
-                   (+ (perform get1 ()) (perform get2 ())))))
-(check-equal? (eval-closed t3) 3)
+  (define t2 '(handle ([(get _ k) (continue k 1)]) (+ (perform get ()) (perform get ()))))
+  (check-equal? (eval-closed t2) 2)
 
-(define t4
-  '(handle ([(get1 _ k) (continue k 1)])
-           (handle ([(get2 _ k) (continue k 2)])
-                   (+ (perform get2 ()) (perform get1 ())))))
-(check-equal? (eval-closed t4) 3)
+  (define t3
+    '(handle ([(get1 _ k) (continue k 1)])
+             (handle ([(get2 _ k) (continue k 2)])
+                     (+ (perform get1 ()) (perform get2 ())))))
+  (check-equal? (eval-closed t3) 3)
 
-(define t5
-  '(handle ([(throw _ k) -1])
-           (+ 42 (perform throw ()))))
-(check-equal? (eval-closed t5) -1)
+  (define t4
+    '(handle ([(get1 _ k) (continue k 1)])
+             (handle ([(get2 _ k) (continue k 2)])
+                     (+ (perform get2 ()) (perform get1 ())))))
+  (check-equal? (eval-closed t4) 3)
 
-;; examples from An Introduction to Algebriac Effect Handlers by Matija Pretnar
-;; (define print-full-name
-;;   `(let (_ (peform print "What is your forename?"))
-;;      (let (forename (perform read ()))
-;;        (let (_ (perform (print "What is your surname?")))
-;;          (let (surname (perform read ()))
-;;            (let (_ (perform print forename))
-;;              (let (_ (perform print surname))
-;;                (perform return ()))))))))
-;;
-;; (define choose
-;;   '(lambda (x)
-;;      (lambda (y)
-;;        (let (b (perform decide #f))
-;;          (if b x y)))))
-;;
-;; (define choose-sum
-;;   `(let (choose ,choose)
-;;      (let (x ((choose 15) 30))
-;;        (let (y ((choose 5) 10))
-;;          (+ x y)))))
-;;
-;; (define pick-true
-;;   '([(decide _ k) (continue k #t)]))
-;;
-;; (check-equal? (eval-closed `(handle ,pick-true ((,choose 1) 2))) 1)
-;;
-;; (check-equal? (eval-closed `(handle ,pick-true ,choose-sum)) 20)
-;;
-;; (define pick-max
-;;   '([(decide _ k)
-;;      (let [t (continue k #t)]
-;;        (let [f (continue k #f)]
-;;          (if (< t f) f t)))]))
-;;
-;; (check-equal? (eval-closed `(handle ,pick-max ,choose-sum)) 40)
-;;
-;; (define choose-int
-;;   '(lambda (m)
-;;      (lambda (n)
-;;        (letrec [(helper m)
-;;                 (if (< n m)
-;;                     (perform fail ())
-;;                     (let [b (perform decide ())]
-;;                       (if b m (helper (+ m 1)))))]
-;;          (helper m)))))
-;;
-;; (define is-sqr?
-;;   '(lambda (n)
-;;      (letrec ([helper k] (if (< n k)
-;;                              #f
-;;                              (if (= (* k k) n)
-;;                                  #t
-;;                                  (helper (+ k 1)))))
-;;        (helper 0))))
-;;
-;; (check-equal? (eval-closed `(,is-sqr? 3)) #f)
-;;
-;; (check-equal? (eval-closed `(,is-sqr? 4)) #t)
-;;
-;; (define pythagorean
-;;   `(lambda (m)
-;;      (lambda (n)
-;;        (let [a ((,choose-int m) (+ n -1))]
-;;          (let [b ((,choose-int (+ a 1)) n)]
-;;            (if (,is-sqr? (+ (* a a) (* b b)))
-;;                          (cons a b)
-;;                          (perform fail ())))))))
-;;
-;; (define backtrack
-;;   '([(decide _ k)
-;;      (handle
-;;       ([(fail _ _) (continue k #f)])
-;;       (continue k #t))]))
-;;
-;; (check-equal? (eval-closed `(handle ,backtrack ((,pythagorean 4) 15))) (cons 5 12))
+  (define t5
+    '(handle ([(throw _ k) -1])
+             (+ 42 (perform throw ()))))
+  (check-equal? (eval-closed t5) -1)
 
-(define state
-  '([(get _ k) (lambda (s) ((continue k s) s))]
-    [(set s k) (lambda (_) ((continue k ()) s))]
-    [(return x _) (lambda (_) x)]))
+  ;; examples from An Introduction to Algebriac Effect Handlers by Matija Pretnar
+  (define print-full-name
+    `(let (_ (peform print "What is your forename?"))
+       (let (forename (perform read ()))
+         (let (_ (perform (print "What is your surname?")))
+           (let (surname (perform read ()))
+             (let (_ (perform print forename))
+               (let (_ (perform print surname))
+                 (perform return ()))))))))
 
-(define push-42
-  `((handle ,state
-            (perform return
-                     (let [s (perform get ())]
-                       (let [_ (perform set (cons 42 s))]
-                         (perform get ()))))) ()))
+  (define choose
+    '(lambda (x)
+       (lambda (y)
+         (let (b (perform decide #f))
+           (if b x y)))))
 
-(check-equal? (eval-closed push-42) (cons 42 '()))
+  (define choose-sum
+    `(let (choose ,choose)
+       (let (x ((choose 15) 30))
+         (let (y ((choose 5) 10))
+           (+ x y)))))
+
+  (define pick-true
+    '([(decide _ k) (continue k #t)]))
+
+  (check-equal? (eval-closed `(handle ,pick-true ((,choose 1) 2))) 1)
+
+  (check-equal? (eval-closed `(handle ,pick-true ,choose-sum)) 20)
+
+  (define pick-max
+    '([(decide _ k)
+       (let [t (continue k #t)]
+         (let [f (continue k #f)]
+           (if (< t f) f t)))]))
+
+  (check-equal? (eval-closed `(handle ,pick-max ,choose-sum)) 40)
+
+  (define choose-int
+    '(lambda (m)
+       (lambda (n)
+         (letrec [(helper m)
+                  (if (< n m)
+                      (perform fail ())
+                      (let [b (perform decide ())]
+                        (if b m (helper (+ m 1)))))]
+           (helper m)))))
+
+  (define is-sqr?
+    '(lambda (n)
+       (letrec ([helper k] (if (< n k)
+                               #f
+                               (if (= (* k k) n)
+                                   #t
+                                   (helper (+ k 1)))))
+         (helper 0))))
+
+  (check-equal? (eval-closed `(,is-sqr? 3)) #f)
+
+  (check-equal? (eval-closed `(,is-sqr? 4)) #t)
+
+  (define pythagorean
+    `(lambda (m)
+       (lambda (n)
+         (let [a ((,choose-int m) (+ n -1))]
+           (let [b ((,choose-int (+ a 1)) n)]
+             (if (,is-sqr? (+ (* a a) (* b b)))
+                 (cons a b)
+                 (perform fail ())))))))
+
+  (define backtrack
+    '([(decide _ k)
+       (handle
+        ([(fail _ _) (continue k #f)])
+        (continue k #t))]))
+
+  (check-equal? (eval-closed `(handle ,backtrack ((,pythagorean 4) 15))) (cons 5 12))
+
+  (define state
+    '([(get _ k) (lambda (s) ((continue k s) s))]
+      [(set s k) (lambda (_) ((continue k ()) s))]
+      [(return x _) (lambda (_) x)]))
+
+  (define push-42
+    `((handle ,state
+              (perform return
+                       (let [s (perform get ())]
+                         (let [_ (perform set (cons 42 s))]
+                           (perform get ()))))) ()))
+
+  (check-equal? (eval-closed push-42) (cons 42 '())))
