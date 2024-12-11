@@ -11,7 +11,7 @@
 
 (define-syntax-rule (module-begin expr ...)
   (#%module-begin
-   (expand-define expr ...)))
+   (eval-closed (expand-define expr ...))))
 
 (define-syntax-rule (top-interaction . expr)
   (eval-closed `expr))

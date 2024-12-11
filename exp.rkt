@@ -222,8 +222,10 @@
 ;; op-name: an operation name
 ;; cont: a continuation
 ;; If cont = E1[(with-handler h [E2])]
-;; where h maps op-name to clause
+;; where h is the innermost handler that maps op-name to clause
 ;; returns values: E1, (with-handler h E2), clause
+;; note that (with-handler h E2) is the captured continuation
+;; which later binds to the `k`
 (: capture-handler (-> Name Cont (Values Cont Cont handler-clause)))
 (define (capture-handler op-name cont)
   (match cont
@@ -297,10 +299,11 @@
            (values E1 (handler-cont h E2) clause)))]
     [(handler-cont handler saved-cont)
      (define clause? (handles? handler op-name))
-     (if clause?
-         (values saved-cont (handler-cont handler (end-cont)) clause?)
-         (let-values ([(E1 E2 clause) (capture-handler op-name saved-cont)])
-           (values E1 (handler-cont handler E2) clause)))]))
+     (cond
+       [clause? (values saved-cont (handler-cont handler (end-cont)) clause?)]
+       [(eq? op-name 'return) (values saved-cont (handler-cont handler (end-cont)) (handler-clause 'x 'k '(continue k x) (empty-env)))]
+       [#t (let-values ([(E1 E2 clause) (capture-handler op-name saved-cont)])
+           (values E1 (handler-cont handler E2) clause))])]))
 
 ;; Given cont1, cont2, returns cont1[cont2]
 ;; (apply-cont (compose-cont cont1 cont2) value) = (apply-cont cont1 (apply-cont cont2 value))
@@ -388,7 +391,7 @@
 ;; Given a continuation and a value, completes the computation.
 (: apply-cont (-> Cont Value Value))
 (define (apply-cont cont v)
-  (when debug (displayln (format "apply-cont\n\t~a\n\t~a" cont v)))
+  (when debug (displayln (format "apply-cont\n\tcont: ~a\n\tvalue: ~a" cont v)))
   (match cont
     [(end-cont) v]
     [(print-cont saved-cont)
@@ -442,17 +445,21 @@
      (apply-closure (cast v1 closure) v saved-cont)]
     [(with-cont1 e saved-env saved-cont)
      (eval e saved-env (with-cont2 v saved-cont))]
-    [(with-cont2 _handler saved-cont)
-     (apply-cont saved-cont v)]
-    [(handler-cont _handler saved-cont)
-     (apply-cont saved-cont v)]
+    [(with-cont2 h saved-cont)
+      (define clause? (handles? (cast h handler) 'return))
+      (if clause? (apply-handler-clause clause? v (end-cont) saved-cont)
+        (apply-cont saved-cont v))] 
+    [(handler-cont handler saved-cont)
+      (define clause? (handles? handler 'return))
+      (if clause? (apply-handler-clause clause? v (end-cont) saved-cont)
+        (apply-cont saved-cont v))] 
     [_ (error 'todo (format "~a" cont))]))
 
 ;; Core interpreter logic
 ;; Evaluates a term in the given environment and continuation.
 (: eval (-> Term Env Cont Value))
 (define (eval e env cont)
-  (when debug (displayln (format "eval\n\t~a\n\t~a\n\t~a" e env cont)))
+  (when debug (displayln (format "eval\n\te: ~a\n\tenv: ~a\n\tcont: ~a" e env cont)))
   (match e
     ['() (apply-cont cont '())]
     [(? boolean? v) (apply-cont cont v)]
@@ -483,6 +490,9 @@
      (eval arg env (perform-cont op cont))]
     [`(let (,(? symbol? x) ,e) ,body)
      (eval e env (let-cont x body env cont))]
+    [`(do) (apply-cont cont #f)]
+    [`(do ,e1 ,e2 ...)
+      (eval `(let (_ ,e1) (do . ,e2)) env cont)]
     [`(letrec ((,(? symbol? f) ,(? symbol? x)) ,e) ,body)
      (eval body (extend-letrec-env f x e env) cont)]
     [`(continue ,(? symbol? k) ,e)
