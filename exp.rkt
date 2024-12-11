@@ -299,11 +299,10 @@
            (values E1 (handler-cont h E2) clause)))]
     [(handler-cont handler saved-cont)
      (define clause? (handles? handler op-name))
-     (cond
-       [clause? (values saved-cont (handler-cont handler (end-cont)) clause?)]
-       [(eq? op-name 'return) (values saved-cont (handler-cont handler (end-cont)) (handler-clause 'x 'k '(continue k x) (empty-env)))]
-       [#t (let-values ([(E1 E2 clause) (capture-handler op-name saved-cont)])
-           (values E1 (handler-cont handler E2) clause))])]))
+     (if clause?
+         (values saved-cont (handler-cont handler (end-cont)) clause?)
+         (let-values ([(E1 E2 clause) (capture-handler op-name saved-cont)])
+           (values E1 (handler-cont handler E2) clause)))]))
 
 ;; Given cont1, cont2, returns cont1[cont2]
 ;; (apply-cont (compose-cont cont1 cont2) value) = (apply-cont cont1 (apply-cont cont2 value))
