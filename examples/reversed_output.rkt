@@ -1,4 +1,4 @@
-#lang s-exp "mini-effect.rkt"
+#lang s-exp "../mini-effect.rkt"
 
 (def reverse
   (handler [(print s k) (do (continue k #f) (print s))]))

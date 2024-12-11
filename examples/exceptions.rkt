@@ -1,4 +1,4 @@
-#lang s-exp "mini-effect.rkt"
+#lang s-exp "../mini-effect.rkt"
 
 (def default
   (lambda (x)
