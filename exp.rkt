@@ -10,27 +10,27 @@
 (define-type Name Symbol)
 
 ;; Environment
+;;
+;; An environment is a representation of a map from names to values.
 
 (define-type Env (Listof (Pair Name Any)))
 
-;; empty-env : -> Env
-;; creates an empty environment
+;; Creates an empty environment.
 (define (empty-env) '())
 
-;; extend-env : Name * Value * Env -> Value
-;; extends an environment with a name and value
+;; Extends an environment with a name and value.
 (: extend-env (-> Name Any Env Env))
 (define (extend-env x v env)
   (cons (cons x v) env))
 
-;; extend-letrec-env : Name * Name * Term * Env -> Env
+;; Extends an environment with a recursive function.
 ;; (apply (extend-letrec-env f x e env) f) = (extend-letrec-env f x e env)
 (: extend-letrec-env (-> Name Name Term Env Env))
 (define (extend-letrec-env f x e env)
   (extend-env f (closure x e (delay (extend-letrec-env f x e env)))
               env))
 
-;; apply-env : Env * Name -> Value
+;; Returns the value of a key.
 (: apply-env (-> Env Name Value))
 (define (apply-env env x)
   (let ([res? (assoc x env)])
@@ -41,7 +41,7 @@
   (check-equal? (apply-env '((x . 1)) 'x) 1)
   (check-exn exn:fail? (lambda () (apply-env '((x . 1)) 'y))))
 
-;; in-env? : Name * Env -> Bool
+;; Tests the existence of a key.
 (: in-env? (-> Name Env Boolean))
 (define (in-env? x env)
   (if (assoc x env) #t #f))
@@ -59,7 +59,6 @@
    [saved-env : (U Env (Promise Env))])
   #:transparent)
 
-;; closure * value * continuation -> value
 (: apply-closure (-> closure Value Cont Value))
 (define (apply-closure cls v cont)
   (match-define (closure arg body saved-env^) cls)
@@ -81,7 +80,6 @@
   ([clauses : (Listof (Pair Name handler-clause))])
   #:transparent)
 
-;; handler * symbol -> handler-clause | #f
 ;; h: a handler value
 ;; op-name: name of an operation
 ;; returns the handler-clause named op-name in h or #f if not present
@@ -95,9 +93,8 @@
               (cdr clause)
               (iter-clauses (cdr clauses)))))))
 
-(define handler-1 (handler `((op . ,(handler-clause 'x 'k 42 (empty-env))))))
-
 (module+ test
+  (define handler-1 (handler `((op . ,(handler-clause 'x 'k 42 (empty-env))))))
   (check-equal? (handles? handler-1 'op)
                 (handler-clause 'x 'k 42 (empty-env)))
 
@@ -218,12 +215,10 @@
 
 ;; (cotinue k □)
 (struct continue-cont
-  (
-   [k : Cont]
+  ([k : Cont]
    [saved-cont : Cont])
   #:transparent)
 
-;; symbol * continuation -> continuation * continuation * handler-caluse
 ;; op-name: an operation name
 ;; cont: a continuation
 ;; If cont = E1[(with-handler h [E2])]
@@ -307,8 +302,8 @@
          (let-values ([(E1 E2 clause) (capture-handler op-name saved-cont)])
            (values E1 (handler-cont handler E2) clause)))]))
 
-;; continuation * continuation -> continuation
-;; returns cont1[cont2]
+;; Given cont1, cont2, returns cont1[cont2]
+;; (apply-cont (compose-cont cont1 cont2) value) = (apply-cont cont1 (apply-cont cont2 value))
 (: compose-cont (-> Cont Cont Cont))
 (define (compose-cont cont1 cont2)
   (match cont2
@@ -381,9 +376,6 @@
 
    (check-equal? cls (handler-clause 'x 'k 42 (empty-env)))))
 
-
-
-;; handler-clause * value * continuation * continuation -> value
 (: apply-handler-clause (-> handler-clause Value Cont Cont Value))
 (define (apply-handler-clause cls v k cont)
   (when debug (displayln (format "apply-handler-clause\n\t~a\n\t~a\n\t~a\n\t~a" cls v k cont)))
@@ -393,7 +385,7 @@
                     (extend-env arg-name v saved-env))
         cont))
 
-;; continuation * value -> value
+;; Given a continuation and a value, completes the computation.
 (: apply-cont (-> Cont Value Value))
 (define (apply-cont cont v)
   (when debug (displayln (format "apply-cont\n\t~a\n\t~a" cont v)))
@@ -456,7 +448,8 @@
      (apply-cont saved-cont v)]
     [_ (error 'todo (format "~a" cont))]))
 
-;; core interpreter logic
+;; Core interpreter logic
+;; Evaluates a term in the given environment and continuation.
 (: eval (-> Term Env Cont Value))
 (define (eval e env cont)
   (when debug (displayln (format "eval\n\t~a\n\t~a\n\t~a" e env cont)))
@@ -512,13 +505,13 @@
      (eval body env new-cont)]
     [_ (error 'bad-syntax (format "~a" e))]))
 
+;; Evaluates a closed term in the empty environment and continuation.
 (: eval-closed (-> Term Value))
 (define (eval-closed e)
   (eval e (empty-env) (end-cont)))
 
-;; sanity checks
-
 (module+ test
+  ;; sanity checks for simple things
   (check-equal? (eval-closed 1) 1)
 
   (check-equal? (eval-closed '(+ 1 1)) 2)
