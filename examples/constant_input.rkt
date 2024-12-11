@@ -1,4 +1,4 @@
-#lang s-exp "effect.rkt"
+#lang s-exp "mini-effect.rkt"
 
 (def always-read
   (lambda (s)
