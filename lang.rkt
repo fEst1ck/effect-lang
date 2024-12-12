@@ -807,5 +807,4 @@
   (check-true (type-check-closed
    '(handler [(print x k) (do (continue k #f) (print x))])
    '(=> (! Boolean ((print . (-> String Boolean))))
-        Boolean)))
-  )
+        Boolean))))

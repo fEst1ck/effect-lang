@@ -228,6 +228,8 @@ After this, we implement the type checker
 ;; returns false or raise exceptions if type check fails
 ```
 
+In `mini-effect.rkt`, we implement some macros for using Mini-Effect with `#lang s-exp "mini-effect.rkt"`. This is convenient for trying out examples.
+
 ## Tests
 
 Run unit tests directly with:
