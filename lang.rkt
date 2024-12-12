@@ -814,6 +814,7 @@
 ;; Testing the type checker
 (module+ test
   (check-true (type-check-closed #t 'Boolean))
+  (check-true (type-check-closed #t '(! Boolean ((op1 . (-> String Boolean)) (op2 . (-> Number Number))))))
   (check-false (type-check-closed #f 'Number))
   (check-true (type-check-closed '(perform foo 1) '(! Boolean ((foo . (-> Number Boolean))))))
   (check-exn exn:fail? (lambda () (type-check-closed '(perform faa 1) '(! Boolean ((foo . (-> Number Boolean)))))))
