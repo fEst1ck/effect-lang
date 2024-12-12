@@ -519,6 +519,7 @@
 (define (eval-closed e)
   (eval e (empty-env) (end-cont)))
 
+;; Testing the interpreter
 (module+ test
   ;; sanity checks for simple things
   (check-equal? (eval-closed 1) 1)
@@ -675,14 +676,30 @@
        ;; actually need to check _ is a valid type
        [`(Listof ,_) true]
        [#t false])]
-    [(? boolean? v) (eq? type 'Boolean)]
-    [(? number? n) (eq? type 'Number)]
-    [(? string? s) (eq? type 'String)]
+    [(? boolean? v)
+     (or
+      (eq? type 'Boolean)
+      ;; assuming well-formedness of types
+      (match type
+        [`(! Boolean ,s) #t]
+        [_ #f]))]
+    [(? number? n)
+     (or
+      (eq? type 'Number)
+      (match type
+        [`(! Number ,s) #t]
+        [_ #f]))]
+    [(? string? s)
+     (or
+      (eq? type 'String)
+      (match type
+        [`(! String ,s) #t]
+        [_ #f]))]
     [(? symbol? x) (equal? (apply-env ctx x) type)]
     [`(lambda (,(? symbol? x)) ,body)
      (match type
        [`(-> ,A ,B) (type-check (extend-env x A ctx) body B)]
-       [#t #f])]
+       [_ #f])]
     [`(print ,e)
      (and
       (eq? type 'Boolean)
@@ -700,9 +717,16 @@
       (type-check ctx e1 'Number)
       (type-check ctx e2 'Number))]
     [`(+ ,e1 ,e2)
+     (if (equal? type 'Number)
      (and
       (type-check ctx e1 'Number)
-      (type-check ctx e2 'Number))]
+      (type-check ctx e2 'Number))
+     (match type
+       [`(! Number ,sigs)
+        ;; TODO: we hve to do this fix to other operators
+        (and
+         (type-check ctx e1 type)
+         (type-check ctx e2 type))]))]
     [`(* ,e1 ,e2)
      (and
       (type-check ctx e1 'Number)
@@ -787,6 +811,7 @@
 (define (type-check-closed expr type)
   (type-check (empty-env) expr type))
 
+;; Testing the type checker
 (module+ test
   (check-true (type-check-closed #t 'Boolean))
   (check-false (type-check-closed #f 'Number))
@@ -796,10 +821,15 @@
    '(handler [(raise _ _) 42])
    '(=> (! String ((raise . (-> Boolean Number))))
         Number)))
+  (check-true (type-check-closed
+   '(handler [(raise _ _) 42])
+   '(=> (! String ((raise . (-> Boolean Number))))
+        ;; types don't have to be precise
+        (! Number ((raise . (-> Boolean Number)))))))
   (check-false (type-check-closed
    '(handler [(raise _ _) 42])
    '(=> (! String ((raise . (-> Boolean Number))))
-        (! Number ((raise . (-> Boolean Number)))))))
+        (! Boolean ((raise . (-> Boolean Number)))))))
   (check-false (type-check-closed
    '(handler [(print x k) (do (continue k #f) (print x))])
    '(=> (! Boolean ((print . (-> String Boolean))))
@@ -807,4 +837,32 @@
   (check-true (type-check-closed
    '(handler [(print x k) (do (continue k #f) (print x))])
    '(=> (! Boolean ((print . (-> String Boolean))))
-        Boolean))))
+        Boolean)))
+  (check-true (type-check-closed
+  '(handler
+    [(get _ k) (lambda (s) ([: (continue k s) (-> String Number)] s))]
+    [(set s k) (lambda (_) ([: (continue k #f) (-> String Number)] s))]
+    [(return x _) (lambda (_) x)])
+  '(=> (! Number ((get . (-> Boolean String))
+                  (set . (-> String Boolean))
+                  (return . (-> Number Number))))
+       (-> String Number))))
+  (check-true (type-check-closed
+  '(handler
+    [(get _ k) (lambda (s) ([: (continue k s) (-> Number Number)] s))]
+    [(set s k) (lambda (_) ([: (continue k #f) (-> Number Number)] s))]
+    [(return x _) (lambda (_) x)])
+  '(=> (! Number ((get . (-> Boolean Number))
+                  (set . (-> Number Boolean))
+                  (return . (-> Number Number))))
+       (-> Number Number))))
+  (check-false (type-check-closed
+  '(handler
+    [(get _ k) (lambda (s) ([: (continue k s) (-> Number Number)] s))]
+    [(set s k) (lambda (_) ([: (continue k #f) (-> Number Number)] s))]
+    [(return x _) (lambda (_) x)])
+  '(=> (! Number ((get . (-> Boolean Number))
+                  (set . (-> Number Boolean))
+                  (return . (-> Number Number))))
+       (-> String Number)))))
+  

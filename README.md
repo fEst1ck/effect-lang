@@ -153,12 +153,41 @@ Running the file in DrRacket will show the result in the REPL. Check `examples/`
 Or you can `(require "lang.rkt")` in a `#lang racket` program, and run `(eval-closed quoted-program)` to evaluate a Mini-Effect program, where quoted-program is a quoted Mini-Effect program.
 
 ```racket
+;; typed/racket REPL
 > (eval-closed '(with (handler [(get _ k) (continue k 1)]) (perform get ())))
 - : Any
 1
 ```
 
 See the unit tests in `lang.rkt` for example usages.
+
+Use `(type-check-closed quoted-program)` to type check a type annotated Mini-Effect program.
+
+```racket
+;; typed/racket REPL
+
+> (type-check-closed
+   '(handler [(raise _ _) 42])
+   '(=> (! String ((raise . (-> Boolean Number))))
+        ;; types don't have to be precise
+        (! Number ((raise . (-> Boolean Number))))))
+- : Boolean
+#t
+
+> (type-check-closed
+  '(handler
+    [(get _ k) (lambda (s) ([: (continue k s) (-> Number Number)] s))]
+    [(set s k) (lambda (_) ([: (continue k #f) (-> Number Number)] s))]
+    [(return x _) (lambda (_) x)])
+  '(=> (! Number ((get . (-> Boolean Number))
+                  (set . (-> Number Boolean))
+                  (return . (-> Number Number))))
+       (-> String Number)))
+- : Boolean
+#f
+```
+
+See more examples in the unit tests.
 
 ## On the Implementation
 
