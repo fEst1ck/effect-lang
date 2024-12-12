@@ -97,7 +97,7 @@ expr ::= (let [(x : type) expr] expr) // type annotated let expression
 
 Type annotations are not required for execution, but are for type checking.
 
-## Semantics of Handlers
+## Semantics of Effect Handlers
 
 We implement the standard semantics of deep effect handlers.
 
@@ -118,13 +118,13 @@ We also support the implicit `return` operation. That is, we have the reduction 
 
 if `h` handles `return` with `[(return x _k) expr]`, and `h` is the inner most handler.
 
-## Meaning of Types
+## Meaning of Effect Types
 
-The type `(! T (op . (-> A B)))` means the term produces a value of type `T`, and it may perform operation `op` with arguments of type `(-> A B)`.
+The effect type `(! T (op . (-> A B)))` means the term produces a value of type `T`, and it may perform operation `op` with arguments of type `(-> A B)`.
 
-The type `(=> C D)` is the type of an effect handler that transforms a computation of type `C` into a computation of type `D`. So suppose a computation `e` has type `C`, and a handler `h` has type `(=> C D)`, then `(with h e)` has type `D`.
+The handler type `(=> C D)` is the type of an effect handler that transforms a computation of type `C` into a computation of type `D`. So suppose a computation `e` has type `C`, and a handler `h` has type `(=> C D)`, then `(with h e)` has type `D`.
 
-## Examples
+## Example Programs
 
 The `examples/` directory contains example Mini-Effect programs, including all the examples in [1].
 
@@ -203,7 +203,7 @@ The evluation function keeps track of the current computation, an environment, a
 The environment is a mapping from free variables to values. In `(eval e env cont)`, `env` contains the values of free variables in `e`.
 The continuation is a representation of the rest of the computation. And we have `(apply-cont cont v)` to complete the rest of computation when the current computation returns a value `v`.
 
-Our interpreter is essentially a CEK machine [4], since each `(eval e env cont)` only calls `(eval e' env' cont') in a tail position.
+Our interpreter is essentially a CEK machine [4], since each `(eval e env cont)` only calls `(eval e' env' cont')` in tail positions.
 
 For example,
 
@@ -219,6 +219,17 @@ would call
 
 in a tail position,
 which simulates the transition of the state `<(+ (f x) 1), env, E[ ]>` to `<(f x), env, E[(+ [ ] 1)]>` in a CEK machine.
+
+In particular, this step is implemented in
+
+```racket
+(define (eval e env cont)
+    ...
+    [`(+ ,e1 ,e2)
+     (eval e1 env (add-cont1 e2 env cont))]
+    ...
+)
+```
 
 ## Outline of the Implementation
 
@@ -261,7 +272,7 @@ In `mini-effect.rkt`, we implement some macros for using Mini-Effect with `#lang
 
 ## Tests
 
-Run unit tests directly with:
+The tests include all unit tests in the `lang.rkt` file within `(module+ test ...)`, and all examples in the `examples/` directory. Run unit tests directly with:
 
 ```bash
 raco test lang.rkt
