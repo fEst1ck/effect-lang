@@ -225,7 +225,7 @@
 ;; where h is the innermost handler that maps op-name to clause
 ;; returns values: E1, (with-handler h E2), clause
 ;; note that (with-handler h E2) is the captured continuation
-;; which later binds to the `k`
+;; which later binds to the `k` in the handler clause
 (: capture-handler (-> Name Cont (Values Cont Cont handler-clause)))
 (define (capture-handler op-name cont)
   (match cont
