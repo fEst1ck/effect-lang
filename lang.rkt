@@ -1,6 +1,6 @@
 #lang typed/racket
 
-(provide eval-closed)
+(provide eval-closed type-check-closed)
 
 (module+ test
   (require typed/rackunit))
