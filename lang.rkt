@@ -1,6 +1,6 @@
 #lang typed/racket
 
-(provide (all-defined-out))
+(provide eval-closed)
 
 (module+ test
   (require typed/rackunit))
@@ -571,7 +571,6 @@
              (+ 42 (perform throw ()))))
   (check-equal? (eval-closed t5) -1)
 
-  ;; examples from An Introduction to Algebriac Effect Handlers by Matija Pretnar
   (define print-full-name
     `(let (_ (peform print "What is your forename?"))
        (let (forename (perform read ()))
@@ -661,3 +660,152 @@
                            (perform get ()))))) ()))
 
   (check-equal? (eval-closed push-42) (cons 42 '())))
+
+(define-type Type
+  (U Symbol
+     (Listof Type)))
+
+;; Checks that in context `ctx`, term `e` has type `type`
+;; returns false or raise exceptions if type check fails
+(: type-check (-> Env Term Type Boolean))
+(define (type-check ctx e type)
+  (match e
+    ['()
+     (match type
+       ;; actually need to check _ is a valid type
+       [`(Listof ,_) true]
+       [#t false])]
+    [(? boolean? v) (eq? type 'Boolean)]
+    [(? number? n) (eq? type 'Number)]
+    [(? string? s) (eq? type 'String)]
+    [(? symbol? x) (equal? (apply-env ctx x) type)]
+    [`(lambda (,(? symbol? x)) ,body)
+     (match type
+       [`(-> ,A ,B) (type-check (extend-env x A ctx) body B)]
+       [#t #f])]
+    [`(print ,e)
+     (and
+      (eq? type 'Boolean)
+      (type-check ctx e 'String))]
+;;     [`(car ,e)
+;;      (eval e env (car-cont cont))]
+;;     [`(cdr ,e)
+;;      (eval e env (cdr-cont cont))]
+    [`(< ,e1 ,e2)
+     (and
+      (type-check ctx e1 'Number)
+      (type-check ctx e2 'Number))]
+    [`(= ,e1 ,e2)
+     (and
+      (type-check ctx e1 'Number)
+      (type-check ctx e2 'Number))]
+    [`(+ ,e1 ,e2)
+     (and
+      (type-check ctx e1 'Number)
+      (type-check ctx e2 'Number))]
+    [`(* ,e1 ,e2)
+     (and
+      (type-check ctx e1 'Number)
+      (type-check ctx e2 'Number))]
+;;     [`(cons ,e1 ,e2)
+;;      (eval e1 env (cons-cont1 e2 env cont))]
+    [`(if ,e1 ,e2 ,e3)
+     (and
+      (type-check ctx e1 'Boolean)
+      (type-check ctx e2 type)
+      (type-check ctx e3 type))]
+    [`(perform ,(? symbol? op) ,arg)
+     (match type
+       [`(! ,t ,sigs)
+        (match (cast (apply-env (cast sigs Env) op) Type)
+          [`(-> ,A ,B)
+           (and
+            (equal? t B)
+            (type-check ctx arg A))])])]
+    [`(let ([: ,(? symbol? x) ,A] ,e) ,body)
+     (and
+      (type-check ctx e (cast A Type))
+      (type-check (extend-env x A ctx) body type))]
+    [`(do) (eq? type 'Boolean)]
+    [`(do ,e1 ,e2 ...)
+      (type-check ctx `(let ([: _ Boolean] ,e1) (do . ,e2)) type)]
+;;     [`(letrec ((,(? symbol? f) ,(? symbol? x)) ,e) ,body)
+;;      (eval body (extend-letrec-env f x e env) cont)]
+    [`(continue ,(? symbol? k) ,e)
+      (match (apply-env ctx k)
+        [`(Continuation ,A ,B)
+         (and
+          (equal? B type)
+          (type-check ctx e (cast A Type)))])]
+    [`(handler [(,(? symbol? ops) ,(? symbol? xs) ,(? symbol? ks)) ,es] ...)
+     (match type
+       [`(=> (! ,A ,sigs) ,D)
+         (define clauses (for/list : (Listof (Pair Symbol (List Name Name Term)))
+                           ([op : Symbol (cast ops (Listof Symbol))] [x : Symbol (cast xs (Listof Symbol))] [k (cast ks (Listof Symbol))] [e (cast es (Listof Term))])
+                           (list op x k e)))
+         (for/fold ([res #t])
+                   ([op-clause clauses])
+           (and res
+                (let* ([op (car op-clause)]
+                      [clause (cdr op-clause)]
+                      [op-ty (apply-env (cast sigs Env) (cast op Symbol))])
+                  (match op-ty
+                    [`(-> ,X ,Y)
+                     (match clause
+                       [(list x k e)
+                        (type-check (extend-env (cast x Symbol) X
+                          (extend-env (cast k Symbol) `(Continuation ,Y ,D) ctx))
+                                    e D)])]))))])]
+    [`([: ,f ,A] ,arg)
+     (and
+      (type-check ctx f (cast A Type))
+      (match A
+        [`(-> ,X ,Y)
+         (and
+          (equal? Y type)
+          (type-check ctx arg (cast X Type)))]))]
+    [`(with [: ,h ,ct] ,e)
+     (and
+      (type-check ctx h (cast ct Type))
+      (match ct
+        [`(=> ,C ,D)
+         (and
+          (equal? D type)
+          (type-check ctx e (cast C Type)))]))]
+         
+;;     [`(handle ([(,(? symbol? ops) ,(? symbol? xs) ,(? symbol? ks)) ,es] ...) ,body)
+;;      (: clauses (Listof (Pair Symbol handler-clause)))
+;;      (define clauses (for/list ([op (cast ops (Listof Symbol))] [x (cast xs (Listof Symbol))] [k (cast ks (Listof Symbol))] [e (cast es (Listof Term))])
+;;                        (cons op (handler-clause x k e env))))
+;;      (define new-cont
+;;        (handler-cont (handler clauses) cont))
+;;      (eval body env new-cont)]
+    [_ (error 'bad-syntax (format "~a" e))]))
+
+;; Type checks a closed term
+(: type-check-closed (-> Term Type Boolean))
+(define (type-check-closed expr type)
+  (type-check (empty-env) expr type))
+
+(module+ test
+  (check-true (type-check-closed #t 'Boolean))
+  (check-false (type-check-closed #f 'Number))
+  (check-true (type-check-closed '(perform foo 1) '(! Boolean ((foo . (-> Number Boolean))))))
+  (check-exn exn:fail? (lambda () (type-check-closed '(perform faa 1) '(! Boolean ((foo . (-> Number Boolean)))))))
+  (check-true (type-check-closed
+   '(handler [(raise _ _) 42])
+   '(=> (! String ((raise . (-> Boolean Number))))
+        Number)))
+  (check-false (type-check-closed
+   '(handler [(raise _ _) 42])
+   '(=> (! String ((raise . (-> Boolean Number))))
+        (! Number ((raise . (-> Boolean Number)))))))
+  (check-false (type-check-closed
+   '(handler [(print x k) (do (continue k #f) (print x))])
+   '(=> (! Boolean ((print . (-> String Boolean))))
+        (! Boolean ((print . (-> String Boolean)))))))
+  (check-true (type-check-closed
+   '(handler [(print x k) (do (continue k #f) (print x))])
+   '(=> (! Boolean ((print . (-> String Boolean))))
+        Boolean)))
+  )
